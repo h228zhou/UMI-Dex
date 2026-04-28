@@ -28,15 +28,17 @@ rm ./config/ORBvoc.txt.tar.gz
 ### `umi-inspect` — bag health check
 
 ```bash
-uv run umi-inspect /path/to/capture.bag --check-topics
+uv run umi-inspect /path/to/capture.bag --check-topics       # ROS1
+uv run umi-inspect /path/to/capture_bag_dir --check-topics    # ROS2
 ```
 
-Reports topic list, message counts, rates, and warns if expected topics are missing.
+Reports topic list, message counts, rates, and warns if expected topics are missing. Auto-detects ROS1 `.bag` files and ROS2 bag directories.
 
 ### `umi-extract` — extract controller + D405 video + episodes (no SLAM)
 
 ```bash
-uv run umi-extract /path/to/capture.bag --out sessions/my_session/
+uv run umi-extract /path/to/capture.bag --out sessions/my_session/       # ROS1
+uv run umi-extract /path/to/capture_bag_dir --out sessions/my_session/   # ROS2
 ```
 
 Produces:
@@ -71,7 +73,15 @@ Options:
 ### `umi-process` — full pipeline (one shot)
 
 ```bash
+# ROS1
 uv run umi-process /path/to/capture.bag \
+  --vocab ./config/ORBvoc.txt \
+  --settings ./config/intel_d455.yaml \
+  --split-episodes \
+  --out sessions/my_session/
+
+# ROS2
+uv run umi-process /path/to/capture_bag_dir \
   --vocab ./config/ORBvoc.txt \
   --settings ./config/intel_d455.yaml \
   --split-episodes \
@@ -135,3 +145,14 @@ All output rows share the column prefix `(idx, t_ros_ns, t_iso, episode_id, ...)
 - `episode_id` — which kept episode this row belongs to (-1 if none)
 
 The `session_meta.json` contains provenance anchors that relate bag time to host monotonic and wall clock, enabling post-hoc clock forensics.
+
+## ROS1 vs ROS2 Bag Compatibility
+
+The Python pipeline auto-detects the bag format:
+
+| Input | Detection | Notes |
+|-------|-----------|-------|
+| `/path/to/capture.bag` (file) | ROS1 | Standard `.bag` file |
+| `/path/to/capture_dir/` (directory with `metadata.yaml`) | ROS2 | mcap or sqlite3 storage |
+
+Custom message types are registered for both formats: `umi_dex/CanFrame` (ROS1) and `umi_dex_msgs/msg/CanFrame` (ROS2). No flags or configuration changes are needed — pass the bag path and the pipeline handles the rest.

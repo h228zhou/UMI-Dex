@@ -8,9 +8,11 @@ This document defines the operator procedure for recording data collection sessi
 2. **D405** — mounted on end-effector or tool, USB 3.0+ cable, color stream.
 3. **CAN interface** — `sudo ip link set can0 up type can bitrate 1000000`.
 
-Verify camera serials are set in `ros/config/camera_serials.conf`.
+Verify camera serials are set in `ros/config/camera_serials.conf` (shared by both ROS1 and ROS2).
 
 ## Pre-flight
+
+### ROS1 Noetic
 
 ```bash
 source /opt/ros/noetic/setup.bash
@@ -18,12 +20,26 @@ source ~/catkin_ws/devel/setup.bash
 cd /path/to/UMI-Dex && mkdir -p outputs
 ```
 
+### ROS2 Jazzy
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+cd /path/to/UMI-Dex && mkdir -p outputs
+```
+
 ## Recording Procedure
 
 ### 1. Launch the capture pipeline
 
+**ROS1:**
 ```bash
 roslaunch umi_dex capture.launch
+```
+
+**ROS2:**
+```bash
+ros2 launch umi_dex_bringup capture.launch.py
 ```
 
 The interactive capture node starts in **idle** state. Available commands are context-sensitive and shown in the prompt.
@@ -84,10 +100,18 @@ Press `s` again to start a new session (new bag, new warm-up). Press `q` to exit
 
 ## Post-Recording
 
-Process the bag offline:
+Process the bag offline. The Python pipeline accepts both ROS1 `.bag` files and ROS2 bag directories:
 
 ```bash
+# ROS1 bag
 uv run umi-process /path/to/capture.bag \
+  --vocab ./config/ORBvoc.txt \
+  --settings ./config/intel_d455.yaml \
+  --split-episodes \
+  --out sessions/<session_id>/
+
+# ROS2 bag (pass the bag directory)
+uv run umi-process /path/to/capture_2025-01-01-12-00-00/ \
   --vocab ./config/ORBvoc.txt \
   --settings ./config/intel_d455.yaml \
   --split-episodes \

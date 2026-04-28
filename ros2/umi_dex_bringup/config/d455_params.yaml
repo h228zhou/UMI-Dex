@@ -1,0 +1,26 @@
+# realsense2_camera ROS2 parameters for D455 stereo IR + IMU capture.
+# Loaded via --params-file or the launch file.
+
+/**:
+  ros__parameters:
+    # Stereo infrared streams (for ORB-SLAM3 stereo-inertial).
+    enable_infra1: true
+    enable_infra2: true
+    depth_module.infra_profile: "848x480x30"
+
+    # Disable color and depth (not needed for stereo-inertial ORB-SLAM3).
+    enable_color: false
+    enable_depth: false
+
+    # IMU (gyro + accel).
+    enable_gyro: true
+    enable_accel: true
+    gyro_fps: 200
+    accel_fps: 200
+    unite_imu_method: 2  # 1=copy, 2=linear_interpolation
+
+    # Use hardware timestamps when available.
+    enable_sync: true
+
+    # Auto-exposure for the depth/infra sensor.
+    depth_module.enable_auto_exposure: true
