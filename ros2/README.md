@@ -78,12 +78,16 @@ cd /path/to/UMI-Dex && mkdir -p outputs
 #   ros2/umi_dex_bringup/config/camera_serials.conf
 # (symlinked to ros/config/camera_serials.conf)
 
-# Launch all streams + interactive recorder.
+# Terminal 1 — hardware streams (cameras + controller)
 ros2 launch umi_dex_bringup capture.launch.py                               # defaults to CAN
 ros2 launch umi_dex_bringup capture.launch.py controller_protocol:=usart \
   usart_port:=/dev/ttyUSB0 usart_baud:=115200
 
-# After launch, use interactive commands:
+# Terminal 2 — interactive recorder (needs its own tty for stdin)
+ros2 run umi_dex_bringup record.sh --protocol can
+ros2 run umi_dex_bringup record.sh --protocol usart
+
+# Interactive commands (shown context-sensitively in the recorder's prompt):
 #   s : start new session (IMU warm-up + episode recording)
 #   e : start/end episode (within a session)
 #   c : end session (save bag with all episodes)
@@ -109,8 +113,11 @@ ros2 launch umi_dex_bringup controller.launch.py
 # USART raw frame publisher only
 ros2 launch umi_dex_bringup controller.launch.py controller_protocol:=usart usart_port:=/dev/ttyUSB0
 
-# Override defaults
-ros2 launch umi_dex_bringup capture.launch.py can_channel:=can1 warmup_duration_s:=20.0
+# Override capture defaults
+ros2 launch umi_dex_bringup capture.launch.py can_channel:=can1
+
+# Override recorder defaults
+ros2 run umi_dex_bringup record.sh --protocol can --warmup 20 --bag-dir /tmp/bags
 ```
 
 ### Play back a bag

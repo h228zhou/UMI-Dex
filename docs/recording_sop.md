@@ -50,15 +50,23 @@ roslaunch umi_dex capture.launch \
 
 **ROS2:**
 ```bash
-# CAN (default)
+# Terminal 1 — hardware (cameras + controller)
 ros2 launch umi_dex_bringup capture.launch.py
-
-# USART / ttyUSB
+# USART variant:
 ros2 launch umi_dex_bringup capture.launch.py \
   controller_protocol:=usart \
   usart_port:=/dev/ttyUSB0 \
   usart_baud:=115200
+
+# Terminal 2 — interactive recorder
+ros2 run umi_dex_bringup record.sh --protocol can
+# USART variant:
+ros2 run umi_dex_bringup record.sh --protocol usart
+# Override defaults:
+ros2 run umi_dex_bringup record.sh --protocol can --bag-dir outputs --warmup 15
 ```
+
+> Two terminals are required because `ros2 launch` detaches child stdin, which breaks the interactive hotkey prompt. The recorder must run via `ros2 run` so it inherits a real tty.
 
 The bag records exactly one hand topic — `/hand/can_raw` or `/hand/usart_raw` — matching the selected protocol.
 

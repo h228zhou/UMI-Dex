@@ -1,8 +1,11 @@
-"""Full capture pipeline: D455 + D405 + controller (CAN or USART) + interactive recorder.
+"""Hardware capture pipeline: D455 + D405 + controller (CAN or USART).
+
+Drive recording from a second terminal via `ros2 run umi_dex_bringup record.sh`.
+(The interactive recorder is not launched here because `ros2 launch` detaches
+child stdin, which breaks the hotkey prompt.)
 
 Usage:
   ros2 launch umi_dex_bringup capture.launch.py \\
-    [bag_dir:=/path/to/bags] \\
     [controller_protocol:=can|usart] \\
     [can_channel:=can0] [usart_port:=/dev/ttyUSB0] [usart_baud:=115200]
 """
@@ -11,25 +14,9 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (
-    DeclareLaunchArgument,
-    IncludeLaunchDescription,
-    OpaqueFunction,
-)
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
-
-
-BASE_TOPICS = [
-    "/camera/infra1/image_rect_raw",
-    "/camera/infra1/camera_info",
-    "/camera/infra2/image_rect_raw",
-    "/camera/infra2/camera_info",
-    "/camera/imu",
-    "/camera_d405/color/image_raw",
-    "/camera_d405/color/camera_info",
-]
 
 
 def _read_camera_serials() -> dict[str, str]:
@@ -49,32 +36,6 @@ def _read_camera_serials() -> dict[str, str]:
     except FileNotFoundError:
         pass
     return serials
-
-
-def _hand_topic_for(protocol: str) -> str:
-    return "/hand/usart_raw" if protocol == "usart" else "/hand/can_raw"
-
-
-def _build_recorder(context, *_args, **_kwargs):
-    protocol = LaunchConfiguration("controller_protocol").perform(context)
-    hand_topic = _hand_topic_for(protocol)
-    topics = BASE_TOPICS + [hand_topic, "/session/episode"]
-
-    return [
-        Node(
-            package="umi_dex_bringup",
-            executable="interactive_capture_node",
-            name="interactive_capture",
-            output="screen",
-            parameters=[{
-                "bag_dir": LaunchConfiguration("bag_dir"),
-                "base_name": "capture",
-                "warmup_duration_s": LaunchConfiguration("warmup_duration_s"),
-                "episode_topic": "/session/episode",
-                "topics": topics,
-            }],
-        ),
-    ]
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -97,8 +58,6 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("can_channel", default_value="can0"),
         DeclareLaunchArgument("usart_port", default_value="/dev/ttyUSB0"),
         DeclareLaunchArgument("usart_baud", default_value="115200"),
-        DeclareLaunchArgument("bag_dir", default_value="outputs"),
-        DeclareLaunchArgument("warmup_duration_s", default_value="15.0"),
 
         # D455 stereo IR + IMU
         IncludeLaunchDescription(
@@ -128,7 +87,4 @@ def generate_launch_description() -> LaunchDescription:
                 "usart_baud": LaunchConfiguration("usart_baud"),
             }.items(),
         ),
-
-        # Interactive capture node (topic list depends on protocol)
-        OpaqueFunction(function=_build_recorder),
     ])

@@ -154,7 +154,7 @@ class InteractiveRecorder(Node):
         print("  {}".format(" ".join(shlex.quote(part) for part in cmd)))
 
         self.record_proc = subprocess.Popen(
-            cmd, preexec_fn=os.setsid
+            cmd, preexec_fn=os.setsid, stdin=subprocess.DEVNULL
         )
         time.sleep(1.0)
 

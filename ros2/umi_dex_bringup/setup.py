@@ -16,6 +16,7 @@ setup(
         (os.path.join("share", package_name, "config"), glob("config/*")),
     ],
     install_requires=["setuptools"],
+    scripts=["scripts/record.sh"],
     zip_safe=True,
     maintainer="Linkerbot Maintainers",
     maintainer_email="helloworld@linkerbot.cn",
