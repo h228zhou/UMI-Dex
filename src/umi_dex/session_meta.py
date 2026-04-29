@@ -63,14 +63,37 @@ class SessionMeta:
 
 
 def compute_bag_sha256(bag_path: Path, chunk_size: int = 1 << 20) -> str:
-    """SHA-256 hex digest of a bag file."""
+    """SHA-256 hex digest of a bag.
+
+    For ROS1 ``.bag`` files, hashes the file contents. For ROS2 bag directories,
+    hashes each regular file (sorted by relative path) with the relpath mixed in
+    as a separator so two bags with identical contents but different layouts
+    produce different digests.
+    """
     h = hashlib.sha256()
-    with bag_path.open("rb") as f:
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            h.update(chunk)
+
+    def _hash_file(path: Path) -> None:
+        with path.open("rb") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                h.update(chunk)
+
+    if bag_path.is_dir():
+        files = sorted(
+            (p for p in bag_path.rglob("*") if p.is_file()),
+            key=lambda p: p.relative_to(bag_path).as_posix(),
+        )
+        for p in files:
+            rel = p.relative_to(bag_path).as_posix()
+            h.update(rel.encode("utf-8"))
+            h.update(b"\0")
+            _hash_file(p)
+            h.update(b"\0")
+    else:
+        _hash_file(bag_path)
+
     return h.hexdigest()
 
 

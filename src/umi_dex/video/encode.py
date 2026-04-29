@@ -10,6 +10,7 @@ the mapping ``(idx, t_ros_ns, t_iso, pts_ns)``.
 from __future__ import annotations
 
 import csv
+from fractions import Fraction
 from pathlib import Path
 from typing import Iterator
 
@@ -75,6 +76,13 @@ def encode_d405_from_messages(
     mp4_path = out_dir / "d405_color.mp4"
     csv_path = out_dir / "d405_color_frames.csv"
 
+    # MP4 muxer rejects the 1-ns time_base we'd like (integer timestamps
+    # overflow its 32-bit track timescale), so the container runs at
+    # 90 kHz — the standard MP4 video timescale — and we write the exact
+    # nanosecond t_ros_ns into the sidecar CSV for authoritative timing.
+    mp4_timebase = Fraction(1, 90_000)
+    ns_per_tick = 1_000_000_000 // mp4_timebase.denominator
+
     container = None
     stream = None
     csv_f = csv_path.open("w", newline="", encoding="utf-8")
@@ -83,6 +91,7 @@ def encode_d405_from_messages(
 
     session_start_ns: int | None = None
     frame_count = 0
+    last_pts: int = -1
 
     try:
         for t_ros_ns, img_msg in messages:
@@ -96,13 +105,19 @@ def encode_d405_from_messages(
                 stream.height = h
                 stream.pix_fmt = pix_fmt
                 stream.options = {"crf": str(crf)}
-                stream.time_base = av.Fraction(1, 1_000_000_000)
+                stream.codec_context.time_base = mp4_timebase
+                stream.time_base = mp4_timebase
                 session_start_ns = t_ros_ns
 
             pts_ns = t_ros_ns - session_start_ns
+            pts = pts_ns // ns_per_tick
+            if pts <= last_pts:
+                pts = last_pts + 1
+            last_pts = pts
+
             frame = av.VideoFrame.from_ndarray(bgr, format="bgr24")
-            frame.pts = pts_ns
-            frame.time_base = av.Fraction(1, 1_000_000_000)
+            frame.pts = pts
+            frame.time_base = mp4_timebase
 
             for packet in stream.encode(frame):
                 container.mux(packet)

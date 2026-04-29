@@ -8,7 +8,7 @@ set -euo pipefail
 
 protocol="can"
 bag_dir="outputs"
-warmup="15.0"
+warmup="40.0"
 base_name="capture"
 
 while [[ $# -gt 0 ]]; do

@@ -18,39 +18,29 @@ from typing import Any, Iterator, Optional, Union
 
 from rosbags.rosbag1 import Reader as Rosbag1Reader
 from rosbags.rosbag2 import Reader as Rosbag2Reader
-from rosbags.serde import deserialize_cdr, ros1_to_cdr
-from rosbags.typesys import Stores, get_typestore
+from rosbags.typesys import Stores, get_types_from_msg, get_typestore
 
 from .timebase import stamp_to_ns
 
-_CANFRAME_FIELDS = (
-    [],
-    [
-        ("header", "std_msgs/msg/Header"),
-        ("arb_id", "uint32"),
-        ("dlc", "uint8"),
-        ("data", "uint8[8]"),
-    ],
-)
+_CANFRAME_DEF = """
+std_msgs/Header header
+uint32   arb_id
+uint8    dlc
+uint8[8] data
+"""
 
-_HANDJOINTSTATE_FIELDS = (
-    [],
-    [
-        ("header", "std_msgs/msg/Header"),
-        ("names", "string[6]"),
-        ("positions", "float64[6]"),
-        ("valid", "bool[6]"),
-    ],
-)
+_HANDJOINTSTATE_DEF = """
+std_msgs/Header header
+string[6]  names
+float64[6] positions
+bool[6]    valid
+"""
 
-_USARTFRAME_FIELDS = (
-    [],
-    [
-        ("header", "std_msgs/msg/Header"),
-        ("raw", "uint16[6]"),
-        ("valid_mask", "uint8"),
-    ],
-)
+_USARTFRAME_DEF = """
+std_msgs/Header header
+uint16[6] raw
+uint8     valid_mask
+"""
 
 
 def _detect_bag_version(bag_path: Path) -> int:
@@ -74,21 +64,12 @@ def _build_typestore(version: int) -> Any:
 
 def _register_custom_types(typestore: Any, version: int) -> None:
     """Register custom umi_dex / umi_dex_msgs message types."""
-    try:
-        if version == 1:
-            typestore.register({
-                "umi_dex/msg/CanFrame": _CANFRAME_FIELDS,
-                "umi_dex/msg/HandJointState": _HANDJOINTSTATE_FIELDS,
-                "umi_dex/msg/UsartFrame": _USARTFRAME_FIELDS,
-            })
-        else:
-            typestore.register({
-                "umi_dex_msgs/msg/CanFrame": _CANFRAME_FIELDS,
-                "umi_dex_msgs/msg/HandJointState": _HANDJOINTSTATE_FIELDS,
-                "umi_dex_msgs/msg/UsartFrame": _USARTFRAME_FIELDS,
-            })
-    except Exception:
-        pass
+    prefix = "umi_dex" if version == 1 else "umi_dex_msgs"
+    defs: dict[str, Any] = {}
+    defs.update(get_types_from_msg(_CANFRAME_DEF, f"{prefix}/msg/CanFrame"))
+    defs.update(get_types_from_msg(_HANDJOINTSTATE_DEF, f"{prefix}/msg/HandJointState"))
+    defs.update(get_types_from_msg(_USARTFRAME_DEF, f"{prefix}/msg/UsartFrame"))
+    typestore.register(defs)
 
 
 @dataclass
@@ -263,10 +244,9 @@ class BagReader:
         for conn, timestamp, rawdata in self._reader.messages(connections=conns):
             try:
                 if self._version == 1:
-                    cdr = ros1_to_cdr(rawdata, conn.msgtype)
+                    msg = self._typestore.deserialize_ros1(rawdata, conn.msgtype)
                 else:
-                    cdr = rawdata
-                msg = deserialize_cdr(cdr, conn.msgtype, self._typestore)
+                    msg = self._typestore.deserialize_cdr(rawdata, conn.msgtype)
             except Exception:
                 continue
             yield StampedMessage(
