@@ -38,15 +38,23 @@ Pick the flags matching the unit's controller link. CAN is the default.
 
 **ROS1:**
 ```bash
-# CAN (default)
-roslaunch umi_dex capture.launch
-
-# USART / ttyUSB
+# Terminal 1 — hardware (cameras + controller)
+roslaunch umi_dex capture.launch                             # defaults to CAN
+# USART variant:
 roslaunch umi_dex capture.launch \
   controller_protocol:=usart \
   usart_port:=/dev/ttyUSB0 \
   usart_baud:=115200
+
+# Terminal 2 — interactive recorder (must be its own terminal for stdin)
+rosrun umi_dex record.sh --protocol can
+# USART variant:
+rosrun umi_dex record.sh --protocol usart
+# Override defaults:
+rosrun umi_dex record.sh --protocol can --bag-dir outputs --warmup 15
 ```
+
+> Two terminals are required because `roslaunch` closes each `<node>`'s stdin, which breaks the interactive hotkey prompt. The recorder must run via `rosrun` so it inherits a real tty.
 
 **ROS2:**
 ```bash

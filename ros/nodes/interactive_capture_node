@@ -124,7 +124,9 @@ class InteractiveRecorder:
         print("Starting session recording:")
         print("  {}".format(" ".join(shlex.quote(part) for part in cmd)))
 
-        self.record_proc = subprocess.Popen(cmd, preexec_fn=os.setsid)
+        self.record_proc = subprocess.Popen(
+            cmd, preexec_fn=os.setsid, stdin=subprocess.DEVNULL
+        )
         rospy.sleep(0.5)
 
         self._write_session_sidecar(self.active_prefix)

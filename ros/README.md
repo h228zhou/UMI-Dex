@@ -97,19 +97,28 @@ cd /path/to/UMI-Dex && mkdir -p outputs
 
 # Set camera serials once in:
 #   ros/config/camera_serials.conf
-#
-# Launch all streams + interactive recorder.
-roslaunch umi_dex capture.launch                             # defaults to CAN
+
+# Terminal 1 — hardware streams (cameras + controller)
+roslaunch umi_dex capture.launch                               # defaults to CAN
 roslaunch umi_dex capture.launch controller_protocol:=usart \
   usart_port:=/dev/ttyUSB0 usart_baud:=115200
 
-# After launch, use interactive commands:
-#   s : start new recording
-#   c : stop current recording and keep bag
+# Terminal 2 — interactive recorder (needs its own tty for stdin)
+rosrun umi_dex record.sh --protocol can
+rosrun umi_dex record.sh --protocol usart
+# Override defaults:
+rosrun umi_dex record.sh --protocol can --bag-dir outputs --warmup 15
+
+# Interactive commands (shown context-sensitively in the recorder's prompt):
+#   s : start new session (IMU warm-up + episode recording)
+#   e : start/end episode (within a session)
+#   c : end session (save bag with all episodes)
+#   l : list recordings in bag_dir
 #   r : delete last finished recording
-#   l : list recordings in bag_dir with per-topic count/rate
-#   q : quit (if recording, stop and discard active bag)
+#   q : quit
 ```
+
+Two terminals are required because `roslaunch` closes each `<node>`'s stdin, which breaks the interactive hotkey prompt. The recorder must run via `rosrun` so it inherits a real tty.
 
 A `<bag>.session.json` sidecar is written at recording start with provenance anchors (ROS time, wall clock, host info).
 
