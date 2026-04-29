@@ -24,6 +24,7 @@ setup(
     entry_points={
         "console_scripts": [
             "can_raw_node = umi_dex_bringup.can_raw_node:main",
+            "usart_raw_node = umi_dex_bringup.usart_raw_node:main",
             "interactive_capture_node = umi_dex_bringup.interactive_capture_node:main",
         ],
     },

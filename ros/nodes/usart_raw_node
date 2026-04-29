@@ -1,0 +1,103 @@
+#!/usr/bin/env python
+"""ROS node: publish raw USART encoder frames as umi_dex/UsartFrame.
+
+Firmware emits a 16-byte framed packet per sample:
+  55 AA | valid_mask(1) | 6x(lo, hi12) | checksum(1)
+
+No in-node decoding to radians — that happens offline (or, eventually,
+in firmware once calibration moves there).
+"""
+
+import time
+
+import rospy
+import serial
+from umi_dex.msg import UsartFrame
+
+SOF0 = 0x55
+SOF1 = 0xAA
+FRAME_LEN = 16
+NUM_CHANNELS = 6
+
+
+def parse_frame(frame):
+    if (sum(frame[:-1]) & 0xFF) != frame[-1]:
+        return None
+    valid_mask = frame[2]
+    raw = []
+    p = 3
+    for _ in range(NUM_CHANNELS):
+        lo = frame[p]
+        hi = frame[p + 1] & 0x0F
+        raw.append(((hi << 8) | lo) & 0x0FFF)
+        p += 2
+    return raw, valid_mask
+
+
+def read_loop(ser, pub):
+    while not rospy.is_shutdown():
+        b = ser.read(1)
+        if not b:
+            continue
+        if b[0] != SOF0:
+            continue
+
+        stamp = rospy.Time.now()
+
+        b2 = ser.read(1)
+        if not b2 or b2[0] != SOF1:
+            continue
+
+        rest = ser.read(FRAME_LEN - 2)
+        if len(rest) != FRAME_LEN - 2:
+            continue
+
+        parsed = parse_frame(bytes([SOF0, SOF1]) + rest)
+        if parsed is None:
+            continue
+        raw, valid_mask = parsed
+
+        msg = UsartFrame()
+        msg.header.stamp = stamp
+        msg.raw = raw
+        msg.valid_mask = valid_mask
+        pub.publish(msg)
+
+
+def main():
+    rospy.init_node("usart_raw", anonymous=False)
+
+    port = rospy.get_param("~usart_port", "/dev/ttyUSB0")
+    baud = int(rospy.get_param("~usart_baud", 115200))
+    backoff = float(rospy.get_param("~reconnect_backoff_s", 1.0))
+
+    pub = rospy.Publisher("/hand/usart_raw", UsartFrame, queue_size=50)
+
+    while not rospy.is_shutdown():
+        try:
+            ser = serial.Serial(port, baud, timeout=0.05)
+        except serial.SerialException as e:
+            rospy.logerr(
+                "Cannot open %s@%d: %s; retrying in %.1fs",
+                port, baud, e, backoff,
+            )
+            time.sleep(backoff)
+            continue
+
+        rospy.loginfo("USART raw publisher on %s@%d", port, baud)
+        try:
+            read_loop(ser, pub)
+        except serial.SerialException as e:
+            rospy.logwarn("Serial error on %s: %s; reconnecting", port, e)
+            time.sleep(backoff)
+        finally:
+            try:
+                ser.close()
+            except Exception:
+                pass
+
+    rospy.loginfo("USART raw publisher stopped")
+
+
+if __name__ == "__main__":
+    main()

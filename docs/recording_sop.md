@@ -6,7 +6,9 @@ This document defines the operator procedure for recording data collection sessi
 
 1. **D455** — mounted rigidly, USB 3.0+ cable, stereo IR + IMU enabled.
 2. **D405** — mounted on end-effector or tool, USB 3.0+ cable, color stream.
-3. **CAN interface** — `sudo ip link set can0 up type can bitrate 1000000`.
+3. **Hand controller link** — pick one, matching the unit:
+   - **CAN** units: `sudo ip link set can0 up type can bitrate 1000000`.
+   - **USART / ttyUSB** units: one-time permission setup, `sudo usermod -aG dialout $USER` followed by a logout/login (or `newgrp dialout` in the current shell). Verify with `ls -l /dev/ttyUSB0` — the device should be owned by `root:dialout` with mode `660`. Do **not** use `chmod 666` — it is wiped every time the device re-enumerates.
 
 Verify camera serials are set in `ros/config/camera_serials.conf` (shared by both ROS1 and ROS2).
 
@@ -32,15 +34,33 @@ cd /path/to/UMI-Dex && mkdir -p outputs
 
 ### 1. Launch the capture pipeline
 
+Pick the flags matching the unit's controller link. CAN is the default.
+
 **ROS1:**
 ```bash
+# CAN (default)
 roslaunch umi_dex capture.launch
+
+# USART / ttyUSB
+roslaunch umi_dex capture.launch \
+  controller_protocol:=usart \
+  usart_port:=/dev/ttyUSB0 \
+  usart_baud:=115200
 ```
 
 **ROS2:**
 ```bash
+# CAN (default)
 ros2 launch umi_dex_bringup capture.launch.py
+
+# USART / ttyUSB
+ros2 launch umi_dex_bringup capture.launch.py \
+  controller_protocol:=usart \
+  usart_port:=/dev/ttyUSB0 \
+  usart_baud:=115200
 ```
+
+The bag records exactly one hand topic — `/hand/can_raw` or `/hand/usart_raw` — matching the selected protocol.
 
 The interactive capture node starts in **idle** state. Available commands are context-sensitive and shown in the prompt.
 
@@ -96,7 +116,7 @@ Press `s` again to start a new session (new bag, new warm-up). Press `q` to exit
 - Multiple clean episodes per session — minimises warm-up overhead.
 - No prolonged blank-wall exposure.
 - Consistent lighting (no sudden dark-to-bright transitions).
-- CAN bus active if hand controller is connected.
+- Controller link active — CAN bus up, or ttyUSB device present and readable by the `dialout` group.
 
 ## Post-Recording
 

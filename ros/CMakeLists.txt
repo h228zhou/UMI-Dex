@@ -11,6 +11,7 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(FILES
   CanFrame.msg
   HandJointState.msg
+  UsartFrame.msg
 )
 
 catkin_python_setup()
@@ -28,6 +29,7 @@ catkin_package(CATKIN_DEPENDS
 
 catkin_install_python(PROGRAMS
   nodes/can_raw_node
+  nodes/usart_raw_node
   nodes/interactive_capture_node
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

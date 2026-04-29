@@ -8,6 +8,7 @@ find_package(std_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/CanFrame.msg"
   "msg/HandJointState.msg"
+  "msg/UsartFrame.msg"
   DEPENDENCIES std_msgs
 )
 

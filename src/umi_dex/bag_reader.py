@@ -43,6 +43,15 @@ _HANDJOINTSTATE_FIELDS = (
     ],
 )
 
+_USARTFRAME_FIELDS = (
+    [],
+    [
+        ("header", "std_msgs/msg/Header"),
+        ("raw", "uint16[6]"),
+        ("valid_mask", "uint8"),
+    ],
+)
+
 
 def _detect_bag_version(bag_path: Path) -> int:
     """Return 1 for ROS1 .bag, 2 for ROS2 bag directory."""
@@ -70,11 +79,13 @@ def _register_custom_types(typestore: Any, version: int) -> None:
             typestore.register({
                 "umi_dex/msg/CanFrame": _CANFRAME_FIELDS,
                 "umi_dex/msg/HandJointState": _HANDJOINTSTATE_FIELDS,
+                "umi_dex/msg/UsartFrame": _USARTFRAME_FIELDS,
             })
         else:
             typestore.register({
                 "umi_dex_msgs/msg/CanFrame": _CANFRAME_FIELDS,
                 "umi_dex_msgs/msg/HandJointState": _HANDJOINTSTATE_FIELDS,
+                "umi_dex_msgs/msg/UsartFrame": _USARTFRAME_FIELDS,
             })
     except Exception:
         pass
@@ -144,6 +155,7 @@ class BagReader:
         "d405_color": "/camera_d405/color/image_raw",
         "d405_color_info": "/camera_d405/color/camera_info",
         "hand_can_raw": "/hand/can_raw",
+        "hand_usart_raw": "/hand/usart_raw",
         "hand_joint_states": "/hand/joint_states",
         "session_episode": "/session/episode",
     }

@@ -4,9 +4,9 @@ ROS2 Jazzy capture pipeline for synchronized data recording from:
 
 - **Intel D455** — stereo IR (848x480 @ 30 fps) + IMU (gyro/accel @ 200 Hz)
 - **Intel D405** — color stream + camera info
-- **CAN controller** — raw CAN frames via SocketCAN (CAN ID 0x112)
+- **Hand controller** — raw frames via **CAN** (SocketCAN, ID 0x112) or **USART** (ttyUSB, 16-byte framed). Protocol is selected at launch.
 
-All streams are recorded into a single **ros2 bag** (mcap format) with a shared ROS clock. CAN frame assembly, filtering, and calibration happen offline in the Python pipeline — the recorder captures raw frames only.
+All streams are recorded into a single **ros2 bag** (mcap format) with a shared ROS clock. Controller frame assembly, filtering, and calibration happen offline in the Python pipeline — the recorder captures raw frames only.
 
 ## Package Structure
 
@@ -14,7 +14,7 @@ Two colcon packages:
 
 | Package | Type | Contents |
 |---------|------|----------|
-| `umi_dex_msgs` | ament_cmake | Custom message definitions (CanFrame, HandJointState) |
+| `umi_dex_msgs` | ament_cmake | Custom message definitions (CanFrame, HandJointState, UsartFrame) |
 | `umi_dex_bringup` | ament_python | Nodes, launch files, config |
 
 ## Prerequisites
@@ -24,7 +24,8 @@ Two colcon packages:
 | Ubuntu 24.04 | — |
 | ROS2 Jazzy | `sudo apt install ros-jazzy-desktop` |
 | RealSense ROS2 | `sudo apt install ros-jazzy-realsense2-camera` or build from source |
-| SocketCAN | Kernel built-in; configure with `sudo ip link set can0 up type can bitrate 1000000` |
+| SocketCAN (for `controller_protocol:=can`) | Kernel built-in; configure with `sudo ip link set can0 up type can bitrate 1000000` |
+| USART / ttyUSB (for `controller_protocol:=usart`) | `sudo apt install python3-serial`; add user to `dialout` once: `sudo usermod -aG dialout $USER && newgrp dialout` |
 
 ### Install RealSense ROS2 from source (if apt version is insufficient)
 
@@ -68,15 +69,19 @@ cd /path/to/UMI-Dex && mkdir -p outputs
 ### Record a capture session (interactive)
 
 ```bash
-# Bring up CAN interface first.
-sudo ip link set can0 up type can bitrate 1000000
+# Bring up the controller link:
+#   CAN:   sudo ip link set can0 up type can bitrate 1000000
+#   USART: ensure the user is in `dialout` (one-time: sudo usermod -aG dialout $USER),
+#          then plug the device (default /dev/ttyUSB0).
 
 # Set camera serials in:
 #   ros2/umi_dex_bringup/config/camera_serials.conf
 # (symlinked to ros/config/camera_serials.conf)
 
 # Launch all streams + interactive recorder.
-ros2 launch umi_dex_bringup capture.launch.py
+ros2 launch umi_dex_bringup capture.launch.py                               # defaults to CAN
+ros2 launch umi_dex_bringup capture.launch.py controller_protocol:=usart \
+  usart_port:=/dev/ttyUSB0 usart_baud:=115200
 
 # After launch, use interactive commands:
 #   s : start new session (IMU warm-up + episode recording)
@@ -101,6 +106,9 @@ ros2 launch umi_dex_bringup d405.launch.py
 # CAN raw frame publisher only
 ros2 launch umi_dex_bringup controller.launch.py
 
+# USART raw frame publisher only
+ros2 launch umi_dex_bringup controller.launch.py controller_protocol:=usart usart_port:=/dev/ttyUSB0
+
 # Override defaults
 ros2 launch umi_dex_bringup capture.launch.py can_channel:=can1 warmup_duration_s:=20.0
 ```
@@ -122,8 +130,11 @@ ros2 launch umi_dex_bringup playback.launch.py bag:=/path/to/bag_dir
 | `/camera/imu` | `sensor_msgs/msg/Imu` | 200 Hz | realsense2_camera |
 | `/camera_d405/color/image_raw` | `sensor_msgs/msg/Image` | 30 Hz | realsense2_camera |
 | `/camera_d405/color/camera_info` | `sensor_msgs/msg/CameraInfo` | 30 Hz | realsense2_camera |
-| `/hand/can_raw` | `umi_dex_msgs/msg/CanFrame` | ~300 Hz | can_raw_node |
+| `/hand/can_raw` | `umi_dex_msgs/msg/CanFrame` | ~300 Hz | `can_raw_node` (when `controller_protocol=can`) |
+| `/hand/usart_raw` | `umi_dex_msgs/msg/UsartFrame` | ~300 Hz | `usart_raw_node` (when `controller_protocol=usart`) |
 | `/session/episode` | `std_msgs/msg/String` | event | interactive_capture_node |
+
+Only one of `/hand/can_raw` or `/hand/usart_raw` appears in any given bag — the recorder subscribes to the topic matching the selected protocol.
 
 ## Custom Messages
 
@@ -135,6 +146,16 @@ uint32   arb_id
 uint8    dlc
 uint8[8] data
 ```
+
+### UsartFrame
+
+```
+std_msgs/Header header
+uint16[6] raw         # 12-bit encoder counts
+uint8     valid_mask  # bit i => channel i valid
+```
+
+Raw 16-byte USART packet (`55 AA | mask | 6×(lo,hi12) | checksum`) emitted by the controller firmware. Already assembled; decoding to joint angles happens offline (or, eventually, inside firmware once calibration moves there).
 
 ### HandJointState (legacy, kept for backward compatibility)
 

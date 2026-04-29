@@ -155,4 +155,16 @@ The Python pipeline auto-detects the bag format:
 | `/path/to/capture.bag` (file) | ROS1 | Standard `.bag` file |
 | `/path/to/capture_dir/` (directory with `metadata.yaml`) | ROS2 | mcap or sqlite3 storage |
 
-Custom message types are registered for both formats: `umi_dex/CanFrame` (ROS1) and `umi_dex_msgs/msg/CanFrame` (ROS2). No flags or configuration changes are needed — pass the bag path and the pipeline handles the rest.
+Custom message types are registered for both formats: `umi_dex/CanFrame`, `umi_dex/UsartFrame` (ROS1) and `umi_dex_msgs/msg/CanFrame`, `umi_dex_msgs/msg/UsartFrame` (ROS2). No flags or configuration changes are needed — pass the bag path and the pipeline handles the rest.
+
+## Controller Topic Dispatch
+
+The hand controller publishes on exactly one of these topics per bag, depending on the link used during recording:
+
+| Topic | Source | Decoder |
+|-------|--------|---------|
+| `/hand/can_raw` | SocketCAN (CAN ID 0x112, 3-part assembly) | `CanDecoder` |
+| `/hand/usart_raw` | ttyUSB (16-byte pre-assembled frame) | `UsartDecoder` |
+| `/hand/joint_states` | legacy pre-Phase-5 bags | — |
+
+`umi-extract` and `umi-process` check for these topics in that priority order and dispatch to the right decoder; in every case the resulting `controller.csv` has the same schema.

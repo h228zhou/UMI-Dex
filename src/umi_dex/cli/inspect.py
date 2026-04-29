@@ -65,7 +65,7 @@ def main() -> int:
             "/camera/imu",
             "/camera_d405/color/image_raw",
         }
-        can_topics = {"/hand/can_raw", "/hand/joint_states"}
+        can_topics = {"/hand/can_raw", "/hand/usart_raw", "/hand/joint_states"}
         has_hand = bool(available & can_topics)
 
         missing = expected - available
@@ -73,7 +73,8 @@ def main() -> int:
             for m in sorted(missing):
                 print(f"  WARNING: expected topic missing: {m}")
         if not has_hand:
-            print("  WARNING: no hand topic found (/hand/can_raw or /hand/joint_states)")
+            print("  WARNING: no hand topic found "
+                  "(/hand/can_raw, /hand/usart_raw, or /hand/joint_states)")
         if not missing and has_hand:
             print("  All expected capture topics present.")
 

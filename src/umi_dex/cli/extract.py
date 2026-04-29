@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..bag_reader import BagReader
 from ..controllers.can_decode import CanDecoder, JOINT_NAMES
+from ..controllers.usart_decode import UsartDecoder
 from ..controllers.calibrate import Calibrator
 from ..episodes import extract_episodes, kept_episodes, write_episodes_csv
 from ..session_meta import (
@@ -55,6 +56,57 @@ def _extract_controller_from_can_raw(
             )
             if sample is None:
                 continue
+
+            calibrated = calibrator.map_counts(sample.raw_counts)
+            w.writerow(
+                [idx, sample.t_ros_ns, ros_ns_to_iso(sample.t_ros_ns)]
+                + [f"{v:.1f}" for v in sample.raw_counts]
+                + [f"{v:.1f}" for v in calibrated]
+            )
+            timestamps.append(sample.t_ros_ns)
+            idx += 1
+
+    stats = StreamStats(
+        name="controller",
+        message_count=len(timestamps),
+        first_t_ros_ns=timestamps[0] if timestamps else None,
+        last_t_ros_ns=timestamps[-1] if timestamps else None,
+        rate_hz=estimate_rate_hz(timestamps),
+        output_file="controller.csv",
+    )
+    return csv_path, stats
+
+
+def _extract_controller_from_usart_raw(
+    reader: BagReader,
+    calibrator: Calibrator,
+    out_dir: Path,
+) -> tuple[Path, StreamStats]:
+    """Decode /hand/usart_raw → controller.csv.
+
+    USART frames arrive pre-assembled (6 raw 12-bit counts + validity mask),
+    so we pass them straight through :class:`UsartDecoder` to keep the CSV
+    schema identical to the CAN path.
+    """
+    csv_path = out_dir / "controller.csv"
+    decoder = UsartDecoder()
+    timestamps: list[int] = []
+
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(
+            ["idx", "t_ros_ns", "t_iso"]
+            + [f"raw_{i}" for i in range(6)]
+            + list(JOINT_NAMES)
+        )
+
+        idx = 0
+        for sm in reader.read_topic("/hand/usart_raw"):
+            sample = decoder.feed_usart_frame(
+                t_ros_ns=sm.t_ros_ns,
+                raw=sm.msg.raw,
+                valid_mask=int(sm.msg.valid_mask),
+            )
 
             calibrated = calibrator.map_counts(sample.raw_counts)
             w.writerow(
@@ -204,6 +256,12 @@ def main() -> int:
             print("[umi-extract] Extracting controller from /hand/can_raw ...")
             calibrator = Calibrator(csv_path=args.calibration)
             _, ctrl_stats = _extract_controller_from_can_raw(reader, calibrator, out_dir)
+            meta.streams.append(ctrl_stats)
+            print(f"[umi-extract]   {ctrl_stats.message_count} samples -> controller.csv")
+        elif "/hand/usart_raw" in available:
+            print("[umi-extract] Extracting controller from /hand/usart_raw ...")
+            calibrator = Calibrator(csv_path=args.calibration)
+            _, ctrl_stats = _extract_controller_from_usart_raw(reader, calibrator, out_dir)
             meta.streams.append(ctrl_stats)
             print(f"[umi-extract]   {ctrl_stats.message_count} samples -> controller.csv")
         elif "/hand/joint_states" in available:
