@@ -79,8 +79,14 @@ def _build_recorder(context, *_args, **_kwargs):
 
 def generate_launch_description() -> LaunchDescription:
     serials = _read_camera_serials()
-    d455_serial = serials.get("d455_serial", "")
-    d405_serial = serials.get("d405_serial", "")
+    # Prefix non-empty all-digit serials with '_' — rs_launch.py's yaml.safe_load
+    # would otherwise coerce them to int, which realsense2_camera rejects
+    # (serial_no param is declared as string). The leading '_' is stripped
+    # inside realsense_node_factory.cpp.
+    def _as_serial(v: str) -> str:
+        return f"_{v}" if v else ""
+    d455_serial = _as_serial(serials.get("d455_serial", ""))
+    d405_serial = _as_serial(serials.get("d405_serial", ""))
 
     pkg_share = get_package_share_directory("umi_dex_bringup")
     launch_dir = os.path.join(pkg_share, "launch")

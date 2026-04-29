@@ -11,7 +11,6 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
         DeclareLaunchArgument("serial_no", default_value="",
                               description="D455 serial number (empty=auto)"),
-        DeclareLaunchArgument("device_type", default_value="D455"),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
@@ -22,7 +21,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             launch_arguments={
                 "serial_no": LaunchConfiguration("serial_no"),
-                "device_type": LaunchConfiguration("device_type"),
+                "device_type": "D455",
                 "camera_name": "camera",
                 "camera_namespace": "",
                 "enable_infra1": "true",
