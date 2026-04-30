@@ -15,6 +15,7 @@ htmlcov/
 .venv/
 venv/
 .mplcache/
+.myvenv/
 
 # IDE / editor
 .vscode/

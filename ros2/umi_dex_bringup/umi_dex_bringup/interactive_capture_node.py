@@ -16,18 +16,27 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from typing import List, Optional
 
+import numpy as np
 import rclpy
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import Image, Imu
 from std_msgs.msg import String
 
 STATE_IDLE = "idle"
 STATE_WARMUP = "warmup"
 STATE_READY = "ready"
 STATE_RECORDING = "recording"
+
+IR1_TOPIC = "/camera/infra1/image_rect_raw"
+IR2_TOPIC = "/camera/infra2/image_rect_raw"
+IMU_TOPIC = "/camera/imu"
 
 
 class InteractiveRecorder(Node):
@@ -40,8 +49,13 @@ class InteractiveRecorder(Node):
         self.declare_parameter("base_name", "capture")
         self.declare_parameter("prompt_interval_sec", 0.5)
         self.declare_parameter("topics", rclpy.Parameter.Type.STRING_ARRAY)
-        self.declare_parameter("warmup_duration_s", 15.0)
+        self.declare_parameter("warmup_min_wait_s", 8.0)
+        self.declare_parameter("warmup_ok_sustain_s", 2.0)
+        self.declare_parameter("warmup_timeout_s", 60.0)
         self.declare_parameter("episode_topic", "/session/episode")
+        self.declare_parameter("enable_slam_probe", True)
+        self.declare_parameter("slam_vocab_path", "config/ORBvoc.txt")
+        self.declare_parameter("slam_settings_path", "config/intel_d455.yaml")
 
         self.bag_dir = os.path.abspath(
             self.get_parameter("bag_dir").value
@@ -53,10 +67,23 @@ class InteractiveRecorder(Node):
         self.topics: list[str] = list(
             self.get_parameter("topics").value or []
         )
-        self.warmup_duration_s = float(
-            self.get_parameter("warmup_duration_s").value
+        self.warmup_min_wait_s = float(
+            self.get_parameter("warmup_min_wait_s").value
+        )
+        self.warmup_ok_sustain_s = float(
+            self.get_parameter("warmup_ok_sustain_s").value
+        )
+        self.warmup_timeout_s = float(
+            self.get_parameter("warmup_timeout_s").value
         )
         self.episode_topic: str = self.get_parameter("episode_topic").value
+        self.enable_slam_probe: bool = bool(
+            self.get_parameter("enable_slam_probe").value
+        )
+        self.slam_vocab_path: str = self.get_parameter("slam_vocab_path").value
+        self.slam_settings_path: str = self.get_parameter(
+            "slam_settings_path"
+        ).value
 
         if not self.topics:
             raise ValueError("'topics' parameter must be a non-empty list")
@@ -79,6 +106,39 @@ class InteractiveRecorder(Node):
         self.episode_counter = 0
         self.episodes: List[dict] = []
         self.warmup_start_time: Optional[float] = None
+
+        self._probe = None  # type: Optional[object]
+        self._slam_subs: list = []
+        self._likely_ready_since: Optional[float] = None
+        self._last_warmup_snapshot: Optional[dict] = None
+        self._warmup_incomplete: bool = False
+
+        # Executor spins subscriber callbacks in a background thread so the
+        # interactive stdin loop in run() doesn't starve them.
+        self._executor: Optional[SingleThreadedExecutor] = None
+        self._spin_thread: Optional[threading.Thread] = None
+
+    def start_executor(self) -> None:
+        if self._executor is not None:
+            return
+        self._executor = SingleThreadedExecutor()
+        self._executor.add_node(self)
+        self._spin_thread = threading.Thread(
+            target=self._executor.spin, name="rclpy-spin", daemon=True,
+        )
+        self._spin_thread.start()
+
+    def stop_executor(self) -> None:
+        if self._executor is None:
+            return
+        try:
+            self._executor.shutdown()
+        except Exception:
+            pass
+        if self._spin_thread is not None and self._spin_thread.is_alive():
+            self._spin_thread.join(timeout=2.0)
+        self._executor = None
+        self._spin_thread = None
 
     def run(self) -> None:
         os.makedirs(self.bag_dir, exist_ok=True)
@@ -144,6 +204,9 @@ class InteractiveRecorder(Node):
         self.active_bag_dir = self._recording_dir()
         self.episode_counter = 0
         self.episodes = []
+        self._last_warmup_snapshot = None
+        self._warmup_incomplete = False
+        self._likely_ready_since = None
 
         cmd = [
             "ros2", "bag", "record",
@@ -160,6 +223,8 @@ class InteractiveRecorder(Node):
 
         self._write_session_sidecar()
 
+        self._start_probe()
+
         self._publish_event("warmup_start")
         self.warmup_start_time = time.time()
         self.state = STATE_WARMUP
@@ -167,37 +232,274 @@ class InteractiveRecorder(Node):
         print("")
         print("=" * 60)
         print("IMU WARM-UP: Move the D455 with slow, smooth translations")
-        print("in a textured area for {:.0f} seconds.".format(
-            self.warmup_duration_s
+        print("in a textured area until the SLAM probe reports ready")
+        print("(min {:.0f}s, max {:.0f}s).".format(
+            self.warmup_min_wait_s, self.warmup_timeout_s
         ))
         print("DO NOT: hold still, rotate only, or move too fast.")
         print("=" * 60)
 
-    def _warmup_tick(self) -> None:
-        elapsed = time.time() - self.warmup_start_time
-        remaining = self.warmup_duration_s - elapsed
-
-        if remaining <= 0:
-            self._publish_event("warmup_end")
-            self.state = STATE_READY
-            print("")
-            print("=" * 60)
-            print("WARM-UP COMPLETE. Device is ready to record.")
-            print("Press 'e' to start an episode, 'c' to end session.")
-            print("=" * 60)
-            self._print_prompt()
+    def _start_probe(self) -> None:
+        if not self.enable_slam_probe:
+            return
+        try:
+            from umi_dex.slam.online import WarmupProbe
+        except Exception as exc:
+            self.get_logger().warn(
+                "SLAM probe disabled: orbslam3 import failed: %s" % exc
+            )
+            self._probe = None
             return
 
+        vocab = os.path.abspath(self.slam_vocab_path)
+        settings = os.path.abspath(self.slam_settings_path)
+        if not os.path.isfile(vocab) or not os.path.isfile(settings):
+            self.get_logger().warn(
+                "SLAM probe disabled: vocab or settings missing (%s, %s)"
+                % (vocab, settings)
+            )
+            self._probe = None
+            return
+
+        try:
+            self._probe = WarmupProbe(vocab, settings)
+            self._probe.start()
+        except Exception as exc:
+            self.get_logger().warn("SLAM probe init failed: %s" % exc)
+            self._probe = None
+            return
+
+        self._slam_subs = [
+            self.create_subscription(
+                Image, IR1_TOPIC, self._on_ir1, qos_profile_sensor_data,
+            ),
+            self.create_subscription(
+                Image, IR2_TOPIC, self._on_ir2, qos_profile_sensor_data,
+            ),
+            self.create_subscription(
+                Imu, IMU_TOPIC, self._on_imu, qos_profile_sensor_data,
+            ),
+        ]
+
+    def _stop_probe(self) -> None:
+        for sub in self._slam_subs:
+            try:
+                self.destroy_subscription(sub)
+            except Exception:
+                pass
+        self._slam_subs = []
+        if self._probe is not None:
+            try:
+                self._last_warmup_snapshot = self._probe.snapshot()
+            except Exception:
+                pass
+            try:
+                self._probe.shutdown()
+            except Exception:
+                pass
+            self._probe = None
+
+    def _on_ir1(self, msg: Image) -> None:
+        if self._probe is None:
+            return
+        img = self._image_msg_to_mono(msg)
+        if img is None:
+            return
+        t_ns = int(msg.header.stamp.sec) * 1_000_000_000 + int(
+            msg.header.stamp.nanosec
+        )
+        self._probe.push_ir1(t_ns, img)
+
+    def _on_ir2(self, msg: Image) -> None:
+        if self._probe is None:
+            return
+        img = self._image_msg_to_mono(msg)
+        if img is None:
+            return
+        t_ns = int(msg.header.stamp.sec) * 1_000_000_000 + int(
+            msg.header.stamp.nanosec
+        )
+        self._probe.push_ir2(t_ns, img)
+
+    def _on_imu(self, msg: Imu) -> None:
+        if self._probe is None:
+            return
+        t_ns = int(msg.header.stamp.sec) * 1_000_000_000 + int(
+            msg.header.stamp.nanosec
+        )
+        gv = msg.angular_velocity
+        av = msg.linear_acceleration
+        self._probe.push_imu(
+            t_ns, gv.x, gv.y, gv.z, av.x, av.y, av.z,
+        )
+
+    @staticmethod
+    def _image_msg_to_mono(msg: Image) -> Optional[np.ndarray]:
+        try:
+            h, w = int(msg.height), int(msg.width)
+            arr = np.frombuffer(bytes(msg.data), dtype=np.uint8)
+            if arr.size < h * w:
+                return None
+            return arr[: h * w].reshape(h, w)
+        except Exception:
+            return None
+
+    def _warmup_tick(self) -> None:
+        now = time.time()
+        elapsed = now - self.warmup_start_time
+
+        snap = self._probe.snapshot() if self._probe is not None else None
+        proxy_state = snap["proxy_state"] if snap else None
+
+        if proxy_state == "likely_ready":
+            if self._likely_ready_since is None:
+                self._likely_ready_since = now
+        else:
+            self._likely_ready_since = None
+
+        if self._probe is not None:
+            gated_ready = (
+                elapsed >= self.warmup_min_wait_s
+                and self._likely_ready_since is not None
+                and (now - self._likely_ready_since) >= self.warmup_ok_sustain_s
+            )
+            if gated_ready:
+                self._finish_warmup(
+                    "slam-gated at {:.0f}s".format(elapsed),
+                    incomplete=False,
+                )
+                return
+            if elapsed >= self.warmup_timeout_s:
+                self._force_continue_prompt(elapsed, snap)
+                return
+        else:
+            if elapsed >= self.warmup_timeout_s:
+                self._finish_warmup(
+                    "wall-clock {:.0f}s".format(elapsed),
+                    incomplete=False,
+                )
+                return
+
+        self._render_warmup_line(elapsed, snap)
+
+    def _render_warmup_line(self, elapsed: float, snap: Optional[dict]) -> None:
         ready, _, _ = select.select([sys.stdin], [], [], 1.0)
         if ready:
-            sys.stdin.readline()
-            print("  (warm-up cannot be skipped, "
-                  "{:.0f}s remaining)".format(remaining))
-        else:
-            sys.stdout.write(
-                "\r  [warm-up] {:.0f}s / {:.0f}s elapsed "
-                "— keep moving...  ".format(elapsed, self.warmup_duration_s)
+            line = sys.stdin.readline()
+            cmd = line.strip().lower() if line else ""
+            if cmd == "c":
+                self._stop_probe()
+                self._stop_session(discard_current_episode=True)
+                self._print_prompt()
+                return
+            if cmd == "q":
+                self._stop_probe()
+                self._quit()
+                return
+            print(
+                "  (warm-up cannot be skipped; press 'c' to abort session "
+                "or 'q' to quit, {:.0f}s elapsed)".format(elapsed)
             )
+            return
+
+        if snap is None:
+            line = "\r  [warm-up] {:.0f}s/{:.0f}s — keep moving...  ".format(
+                elapsed, self.warmup_timeout_s,
+            )
+        else:
+            proxy = snap["proxy_state"]
+            frames = snap.get("frames_processed", 0)
+            viba = snap.get("viba_stage", 0)
+            if proxy in ("loading", "waiting", "error"):
+                detail = proxy if proxy != "error" else "error({})".format(
+                    snap.get("error") or "?"
+                )
+                line = (
+                    "\r  [warm-up] {:.0f}s/{:.0f}s | slam: {} viba={}/2 "
+                    "frames={}  ".format(
+                        elapsed, self.warmup_timeout_s, detail, viba, frames,
+                    )
+                )
+            else:
+                ok_for = 0.0
+                if self._likely_ready_since is not None:
+                    ok_for = time.time() - self._likely_ready_since
+                label = "READY" if proxy == "likely_ready" else "tracking"
+                line = (
+                    "\r  [warm-up] {:.0f}s/{:.0f}s | slam: {} viba={}/2 "
+                    "mp={} kf={} frames={} ok_for={:.1f}s  ".format(
+                        elapsed, self.warmup_timeout_s, label, viba,
+                        snap["active_map_points"], snap["num_keyframes"],
+                        frames, ok_for,
+                    )
+                )
+        sys.stdout.write(line)
+        sys.stdout.flush()
+
+    def _finish_warmup(self, reason: str, incomplete: bool) -> None:
+        if self._probe is not None:
+            self._last_warmup_snapshot = self._probe.snapshot()
+        self._warmup_incomplete = bool(incomplete)
+        self._stop_probe()
+        self._publish_event("warmup_end")
+        self.state = STATE_READY
+        print("")
+        print("=" * 60)
+        print("WARM-UP COMPLETE ({}).".format(reason))
+        if incomplete:
+            print("NOTE: marked warmup_incomplete=true in session sidecar.")
+        print("Press 'e' to start an episode, 'c' to end session.")
+        print("=" * 60)
+        self._print_prompt()
+
+    def _force_continue_prompt(
+        self, elapsed: float, snap: Optional[dict]
+    ) -> None:
+        print("")
+        print("=" * 60)
+        print(
+            "Warmup timed out at {:.0f}s without slam probe reaching "
+            "'likely_ready'.".format(elapsed)
+        )
+        if snap is not None:
+            print(
+                "  final: state={} mp={} kf={} time_in_ok={:.1f}s".format(
+                    snap.get("proxy_state"),
+                    snap.get("active_map_points"),
+                    snap.get("num_keyframes"),
+                    snap.get("time_in_ok_s", 0.0),
+                )
+            )
+        print("Force-continue?  y = proceed with warmup_incomplete=true")
+        print("                 n = abort and discard this session")
+        print("=" * 60)
+
+        sys.stdout.write("[warmup?] y/n > ")
+        sys.stdout.flush()
+
+        while rclpy.ok():
+            ready, _, _ = select.select(
+                [sys.stdin], [], [], self.prompt_interval
+            )
+            if not ready:
+                continue
+            line = sys.stdin.readline()
+            if line == "":
+                ans = "n"
+            else:
+                ans = line.strip().lower()
+            if ans == "y":
+                self._finish_warmup(
+                    "force-continue at {:.0f}s".format(elapsed),
+                    incomplete=True,
+                )
+                return
+            if ans == "n":
+                self._stop_probe()
+                self._stop_session(discard_current_episode=True)
+                self._print_prompt()
+                return
+            sys.stdout.write("[warmup?] y/n > ")
             sys.stdout.flush()
 
     def _start_episode(self) -> None:
@@ -276,6 +578,7 @@ class InteractiveRecorder(Node):
     def _quit(self) -> None:
         if self.state != STATE_IDLE:
             self._stop_session(discard_current_episode=True)
+        self._stop_probe()
         print("Exiting interactive capture controller.")
         rclpy.shutdown()
 
@@ -307,7 +610,10 @@ class InteractiveRecorder(Node):
                 "hostname": platform.node(),
                 "kernel": platform.release(),
                 "topics": self.topics,
-                "warmup_duration_s": self.warmup_duration_s,
+                "warmup_min_wait_s": self.warmup_min_wait_s,
+                "warmup_ok_sustain_s": self.warmup_ok_sustain_s,
+                "warmup_timeout_s": self.warmup_timeout_s,
+                "slam_probe_enabled": self.enable_slam_probe,
                 "episodes": [],
                 "ros_distro": "jazzy",
                 "bag_format": "mcap",
@@ -334,6 +640,9 @@ class InteractiveRecorder(Node):
             sidecar["finished_utc"] = (
                 datetime.datetime.utcnow().isoformat() + "Z"
             )
+            if self._last_warmup_snapshot is not None:
+                sidecar["warmup_slam_snapshot"] = self._last_warmup_snapshot
+            sidecar["warmup_incomplete"] = self._warmup_incomplete
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(sidecar, f, indent=2)
         except Exception as exc:
@@ -446,10 +755,12 @@ def main(args=None) -> None:
         print("FATAL: {}".format(exc), file=sys.stderr)
         rclpy.try_shutdown()
         return
+    node.start_executor()
     try:
         node.run()
     except KeyboardInterrupt:
         pass
     finally:
+        node.stop_executor()
         node.destroy_node()
         rclpy.try_shutdown()
