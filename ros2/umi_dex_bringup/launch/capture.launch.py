@@ -14,7 +14,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
@@ -87,4 +87,19 @@ def generate_launch_description() -> LaunchDescription:
                 "usart_baud": LaunchConfiguration("usart_baud"),
             }.items(),
         ),
+
+        # # Force D455 IR emitter OFF after the camera node is up.
+        # # rs_launch.py filters depth_module.emitter_enabled out of launch args,
+        # # and the D455 persists the last-set value across process restarts,
+        # # so we always pin it explicitly at runtime.
+        # TimerAction(
+        #     period=5.0,
+        #     actions=[
+        #         ExecuteProcess(
+        #             cmd=["ros2", "param", "set", "/camera",
+        #                  "depth_module.emitter_enabled", "0"],
+        #             output="screen",
+        #         ),
+        #     ],
+        # ),
     ])

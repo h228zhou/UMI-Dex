@@ -124,9 +124,16 @@ class InteractiveRecorder(Node):
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self)
         self._spin_thread = threading.Thread(
-            target=self._executor.spin, name="rclpy-spin", daemon=True,
+            target=self._spin_safely, name="rclpy-spin", daemon=True,
         )
         self._spin_thread.start()
+
+    def _spin_safely(self) -> None:
+        from rclpy.executors import ExternalShutdownException
+        try:
+            self._executor.spin()
+        except ExternalShutdownException:
+            pass
 
     def stop_executor(self) -> None:
         if self._executor is None:
@@ -580,7 +587,8 @@ class InteractiveRecorder(Node):
             self._stop_session(discard_current_episode=True)
         self._stop_probe()
         print("Exiting interactive capture controller.")
-        rclpy.shutdown()
+        self.stop_executor()
+        rclpy.try_shutdown()
 
     # ---- episode topic ----
 
