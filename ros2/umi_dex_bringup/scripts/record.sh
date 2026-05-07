@@ -64,6 +64,8 @@ case "$protocol" in
   *) echo "--protocol must be 'can' or 'usart'" >&2; exit 2 ;;
 esac
 
+[[ "$warmup" == *.* ]] || warmup="${warmup}.0"
+
 topics="['/camera/infra1/image_rect_raw','/camera/infra1/camera_info',\
 '/camera/infra2/image_rect_raw','/camera/infra2/camera_info',\
 '/camera/imu','/camera_d405/color/image_raw','/camera_d405/color/camera_info',\

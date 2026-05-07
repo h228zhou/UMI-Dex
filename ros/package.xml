@@ -24,4 +24,5 @@
   <exec_depend>rosbag</exec_depend>
   <exec_depend>realsense2_camera</exec_depend>
   <exec_depend>python3-serial</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
 </package>
