@@ -21,6 +21,8 @@ venv/
 .vscode/
 .idea/
 .cursor/
+.claude/
+.github/
 
 # OS files
 .DS_Store
