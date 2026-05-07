@@ -16,6 +16,7 @@ from pathlib import Path
 from ..bag_reader import BagReader
 from ..controllers.calibrate import Calibrator
 from ..controllers.can_decode import CanDecoder, JOINT_NAMES
+from ..controllers.usart_decode import UsartDecoder
 from ..dataset.assemble import assemble
 from ..episodes import extract_episodes, kept_episodes, write_episodes_csv
 from ..session_meta import (
@@ -118,6 +119,42 @@ def main() -> int:
                     )
                     if sample is None:
                         continue
+                    calibrated = calibrator.map_counts(sample.raw_counts)
+                    w.writerow(
+                        [cidx, sample.t_ros_ns, ros_ns_to_iso(sample.t_ros_ns)]
+                        + [f"{v:.1f}" for v in sample.raw_counts]
+                        + [f"{v:.1f}" for v in calibrated]
+                    )
+                    ctrl_timestamps.append(sample.t_ros_ns)
+                    cidx += 1
+            meta.streams.append(StreamStats(
+                name="controller", message_count=len(ctrl_timestamps),
+                first_t_ros_ns=ctrl_timestamps[0] if ctrl_timestamps else None,
+                last_t_ros_ns=ctrl_timestamps[-1] if ctrl_timestamps else None,
+                rate_hz=estimate_rate_hz(ctrl_timestamps),
+                output_file="controller.csv",
+            ))
+            print(f"[umi-process]   {len(ctrl_timestamps)} samples")
+        elif "/hand/usart_raw" in available:
+            print("[umi-process] Extracting controller from /hand/usart_raw ...")
+            calibrator = Calibrator(csv_path=args.calibration)
+            usart_decoder = UsartDecoder()
+            ctrl_timestamps = []
+            ctrl_csv_path = out_dir / "controller.csv"
+            with ctrl_csv_path.open("w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(
+                    ["idx", "t_ros_ns", "t_iso"]
+                    + [f"raw_{i}" for i in range(6)]
+                    + list(JOINT_NAMES)
+                )
+                cidx = 0
+                for sm in reader.read_topic("/hand/usart_raw"):
+                    sample = usart_decoder.feed_usart_frame(
+                        t_ros_ns=sm.t_ros_ns,
+                        raw=sm.msg.raw,
+                        valid_mask=int(sm.msg.valid_mask),
+                    )
                     calibrated = calibrator.map_counts(sample.raw_counts)
                     w.writerow(
                         [cidx, sample.t_ros_ns, ros_ns_to_iso(sample.t_ros_ns)]

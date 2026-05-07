@@ -15,11 +15,13 @@ htmlcov/
 .venv/
 venv/
 .mplcache/
+.myvenv/
 
 # IDE / editor
 .vscode/
 .idea/
 .cursor/
+.claude/
 
 # OS files
 .DS_Store
@@ -31,6 +33,7 @@ recordings/
 Linker_UD/outputs/
 Linker_UD/recordings/
 output_topics_*/
+sessions/
 # sample_data/**/controller_angles.csv
 # sample_data/**/pose_imu.csv
 legacy/

@@ -6,11 +6,15 @@ This document defines the operator procedure for recording data collection sessi
 
 1. **D455** — mounted rigidly, USB 3.0+ cable, stereo IR + IMU enabled.
 2. **D405** — mounted on end-effector or tool, USB 3.0+ cable, color stream.
-3. **CAN interface** — `sudo ip link set can0 up type can bitrate 1000000`.
+3. **Hand controller link** — pick one, matching the unit:
+   - **CAN** units: `sudo ip link set can0 up type can bitrate 1000000`.
+   - **USART / ttyUSB** units: one-time permission setup, `sudo usermod -aG dialout $USER` followed by a logout/login (or `newgrp dialout` in the current shell). Verify with `ls -l /dev/ttyUSB0` — the device should be owned by `root:dialout` with mode `660`. Do **not** use `chmod 666` — it is wiped every time the device re-enumerates.
 
-Verify camera serials are set in `ros/config/camera_serials.conf`.
+Verify camera serials are set in `ros/config/camera_serials.conf` (shared by both ROS1 and ROS2).
 
 ## Pre-flight
+
+### ROS1 Noetic
 
 ```bash
 source /opt/ros/noetic/setup.bash
@@ -18,13 +22,61 @@ source ~/catkin_ws/devel/setup.bash
 cd /path/to/UMI-Dex && mkdir -p outputs
 ```
 
+### ROS2 Jazzy
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+cd /path/to/UMI-Dex && mkdir -p outputs
+```
+
 ## Recording Procedure
 
 ### 1. Launch the capture pipeline
 
+Pick the flags matching the unit's controller link. CAN is the default.
+
+**ROS1:**
 ```bash
-roslaunch umi_dex capture.launch
+# Terminal 1 — hardware (cameras + controller)
+roslaunch umi_dex capture.launch                             # defaults to CAN
+# USART variant:
+roslaunch umi_dex capture.launch \
+  controller_protocol:=usart \
+  usart_port:=/dev/ttyUSB0 \
+  usart_baud:=115200
+
+# Terminal 2 — interactive recorder (must be its own terminal for stdin)
+rosrun umi_dex record.sh --protocol can
+# USART variant:
+rosrun umi_dex record.sh --protocol usart
+# Override defaults:
+rosrun umi_dex record.sh --protocol can --bag-dir outputs --warmup 15
 ```
+
+> Two terminals are required because `roslaunch` closes each `<node>`'s stdin, which breaks the interactive hotkey prompt. The recorder must run via `rosrun` so it inherits a real tty.
+
+**ROS2:**
+```bash
+# Terminal 1 — hardware (cameras + controller)
+ros2 launch umi_dex_bringup capture.launch.py
+# USART variant:
+ros2 launch umi_dex_bringup capture.launch.py \
+  controller_protocol:=usart \
+  usart_port:=/dev/ttyUSB0 \
+  usart_baud:=115200
+
+# Terminal 2 — interactive recorder
+ros2 run umi_dex_bringup record.sh --protocol can
+# USART variant:
+ros2 run umi_dex_bringup record.sh --protocol usart
+# Override defaults:
+ros2 run umi_dex_bringup record.sh --protocol can --bag-dir outputs --warmup 15
+```
+
+> Two terminals are required because `ros2 launch` detaches child stdin, which breaks the interactive hotkey prompt. The recorder must run via `ros2 run` so it inherits a real tty.
+
+The bag records exactly one hand topic — `/hand/can_raw` or `/hand/usart_raw` — matching the selected protocol.
 
 The interactive capture node starts in **idle** state. Available commands are context-sensitive and shown in the prompt.
 
@@ -80,14 +132,22 @@ Press `s` again to start a new session (new bag, new warm-up). Press `q` to exit
 - Multiple clean episodes per session — minimises warm-up overhead.
 - No prolonged blank-wall exposure.
 - Consistent lighting (no sudden dark-to-bright transitions).
-- CAN bus active if hand controller is connected.
+- Controller link active — CAN bus up, or ttyUSB device present and readable by the `dialout` group.
 
 ## Post-Recording
 
-Process the bag offline:
+Process the bag offline. The Python pipeline accepts both ROS1 `.bag` files and ROS2 bag directories:
 
 ```bash
+# ROS1 bag
 uv run umi-process /path/to/capture.bag \
+  --vocab ./config/ORBvoc.txt \
+  --settings ./config/intel_d455.yaml \
+  --split-episodes \
+  --out sessions/<session_id>/
+
+# ROS2 bag (pass the bag directory)
+uv run umi-process /path/to/capture_2025-01-01-12-00-00/ \
   --vocab ./config/ORBvoc.txt \
   --settings ./config/intel_d455.yaml \
   --split-episodes \

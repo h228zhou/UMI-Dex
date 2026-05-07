@@ -4,7 +4,7 @@ ROS Noetic (Python) package for synchronized data capture from:
 
 - **Intel D455** — stereo IR (848x480 @ 30 fps) + IMU (gyro/accel @ 200 Hz)
 - **Intel D405** — color stream + camera info
-- **CAN controller** — raw CAN frames via SocketCAN (CAN ID 0x112)
+- **Hand controller** — raw frames via **CAN** (SocketCAN, ID 0x112) or **USART** (ttyUSB, 16-byte framed). Protocol is selected at launch.
 
 All streams are recorded into a single **rosbag** with a shared ROS clock. CAN frame assembly, filtering, and calibration happen offline in the Python pipeline — the recorder captures raw frames only.
 
@@ -15,7 +15,8 @@ All streams are recorded into a single **rosbag** with a shared ROS clock. CAN f
 | Ubuntu 20.04 | — |
 | ROS Noetic | `sudo apt install ros-noetic-desktop-full` |
 | RealSense ROS (D405 recommended) | Build `librealsense` + `realsense-ros` from source (see below) |
-| SocketCAN | Kernel built-in; configure with `sudo ip link set can0 up type can bitrate 1000000` |
+| SocketCAN (for `controller_protocol:=can`) | Kernel built-in; configure with `sudo ip link set can0 up type can bitrate 1000000` |
+| USART / ttyUSB (for `controller_protocol:=usart`) | `sudo apt install python3-serial`; add user to `dialout` once: `sudo usermod -aG dialout $USER && newgrp dialout` |
 
 ## Install librealsense + realsense-ros from source (recommended for D405)
 
@@ -89,22 +90,35 @@ cd /path/to/UMI-Dex && mkdir -p outputs
 ### Record a capture session (interactive)
 
 ```bash
-# Bring up CAN interface first.
-sudo ip link set can0 up type can bitrate 1000000
+# Bring up the controller link:
+#   CAN:   sudo ip link set can0 up type can bitrate 1000000
+#   USART: ensure the user is in `dialout` (one-time: sudo usermod -aG dialout $USER),
+#          then plug the device (default /dev/ttyUSB0).
 
 # Set camera serials once in:
 #   ros/config/camera_serials.conf
-#
-# Launch all streams + interactive recorder.
-roslaunch umi_dex capture.launch
 
-# After launch, use interactive commands:
-#   s : start new recording
-#   c : stop current recording and keep bag
+# Terminal 1 — hardware streams (cameras + controller)
+roslaunch umi_dex capture.launch                               # defaults to CAN
+roslaunch umi_dex capture.launch controller_protocol:=usart \
+  usart_port:=/dev/ttyUSB0 usart_baud:=115200
+
+# Terminal 2 — interactive recorder (needs its own tty for stdin)
+rosrun umi_dex record.sh --protocol can
+rosrun umi_dex record.sh --protocol usart
+# Override defaults:
+rosrun umi_dex record.sh --protocol can --bag-dir outputs --warmup 15
+
+# Interactive commands (shown context-sensitively in the recorder's prompt):
+#   s : start new session (IMU warm-up + episode recording)
+#   e : start/end episode (within a session)
+#   c : end session (save bag with all episodes)
+#   l : list recordings in bag_dir
 #   r : delete last finished recording
-#   l : list recordings in bag_dir with per-topic count/rate
-#   q : quit (if recording, stop and discard active bag)
+#   q : quit
 ```
+
+Two terminals are required because `roslaunch` closes each `<node>`'s stdin, which breaks the interactive hotkey prompt. The recorder must run via `rosrun` so it inherits a real tty.
 
 A `<bag>.session.json` sidecar is written at recording start with provenance anchors (ROS time, wall clock, host info).
 
@@ -114,8 +128,9 @@ A `<bag>.session.json` sidecar is written at recording start with provenance anc
 # D455 camera only
 roslaunch umi_dex d455.launch
 
-# CAN raw frame publisher only
+# Controller raw frame publisher only (CAN by default; USART via arg)
 roslaunch umi_dex controller.launch
+roslaunch umi_dex controller.launch controller_protocol:=usart usart_port:=/dev/ttyUSB0
 
 # Override defaults
 roslaunch umi_dex capture.launch can_channel:=can1 d405_serial:=123456
@@ -138,7 +153,10 @@ roslaunch umi_dex playback.launch bag:=/path/to/capture.bag
 | `/camera/imu` | `sensor_msgs/Imu` | 200 Hz | realsense2_camera |
 | `/camera_d405/color/image_raw` | `sensor_msgs/Image` | 30 Hz | realsense2_camera |
 | `/camera_d405/color/camera_info` | `sensor_msgs/CameraInfo` | 30 Hz | realsense2_camera |
-| `/hand/can_raw` | `umi_dex/CanFrame` | ~300 Hz | can_raw_node |
+| `/hand/can_raw` | `umi_dex/CanFrame` | ~300 Hz | `can_raw_node` (when `controller_protocol=can`) |
+| `/hand/usart_raw` | `umi_dex/UsartFrame` | ~300 Hz | `usart_raw_node` (when `controller_protocol=usart`) |
+
+Only one of `/hand/can_raw` or `/hand/usart_raw` appears in any given bag — the recorder subscribes to the topic matching the selected protocol.
 
 ## Custom Messages
 
@@ -152,6 +170,16 @@ uint8[8] data
 ```
 
 Raw CAN bus frame. Assembly into 6-channel joint angles and calibration happen offline in the Python pipeline.
+
+### UsartFrame
+
+```
+std_msgs/Header header
+uint16[6] raw         # 12-bit encoder counts
+uint8     valid_mask  # bit i => channel i valid
+```
+
+Raw 16-byte USART packet (`55 AA | mask | 6×(lo,hi12) | checksum`) emitted by the controller firmware. Already assembled; decoding to joint angles happens offline (or, eventually, inside firmware once calibration moves there).
 
 ### HandJointState (legacy, kept for backward compatibility)
 
@@ -181,9 +209,11 @@ ros/
 │   └── playback.launch
 ├── msg/
 │   ├── CanFrame.msg
-│   └── HandJointState.msg
+│   ├── HandJointState.msg
+│   └── UsartFrame.msg
 ├── nodes/
 │   ├── can_raw_node
+│   ├── usart_raw_node
 │   └── interactive_capture_node
 └── umi_dex/
     └── __init__.py
